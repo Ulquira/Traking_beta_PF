@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { z } from 'zod';
 import pool from './db.ts';
 import fs from 'fs';
 import path from 'path';
@@ -18,16 +21,39 @@ const port = parseInt(process.env.PORT || '3001', 10);
 const CAPA_INTERMEDIA_URL = process.env.CAPA_INTERMEDIA_URL || 'http://localhost:4001';
 const SECRET_API_KEY = process.env.SECRET_API_KEY || "LLAVE_SECRETA_DEL_TERCERO_123";
 
-app.use(cors({ origin: '*' }));
+// Seguridad y Confianza (Cloud Run)
+app.set('trust proxy', 1);
+app.use(helmet());
+
+app.use(cors({ 
+  origin: process.env.FRONTEND_URL || '*', 
+  methods: ['GET', 'POST']
+}));
 app.use(express.json());
 
-// Endpoint para guardar reprogramaciones en BD
-app.post('/api/reprogramar', async (req, res) => {
-  const { token, fecha, turno, motivo } = req.body;
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 150,
+  message: { success: false, message: 'Demasiadas peticiones, intenta más tarde' }
+});
+app.use('/api/', apiLimiter);
 
-  if (!token || !fecha || !turno) {
-    return res.status(400).json({ success: false, message: 'Faltan datos obligatorios' });
+// Endpoint para guardar reprogramaciones en BD
+const reprogramarSchema = z.object({
+  token: z.string().min(5).max(150),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  turno: z.enum(['Mañana', 'Tarde']),
+  motivo: z.string().max(500).optional().default('')
+});
+
+app.post('/api/reprogramar', async (req, res) => {
+  const parseResult = reprogramarSchema.safeParse(req.body);
+
+  if (!parseResult.success) {
+    return res.status(400).json({ success: false, message: 'Datos inválidos', errors: parseResult.error.format() });
   }
+
+  const { token, fecha, turno, motivo } = parseResult.data;
 
   try {
     const query = `
@@ -44,16 +70,32 @@ app.post('/api/reprogramar', async (req, res) => {
 });
 
 // Endpoint para guardar Encuestas en BD
+const encuestaSchema = z.object({
+  token: z.string().min(5).max(150),
+  instalacion_concretada: z.enum(['Si', 'No']),
+  tecnico_trato: z.number().int().min(1).max(5).optional(),
+  tecnico_puntualidad: z.number().int().min(1).max(5).optional(),
+  tecnico_claridad: z.number().int().min(1).max(5).optional(),
+  tecnico_orden: z.number().int().min(1).max(5).optional(),
+  tecnico_efectividad: z.number().int().min(1).max(5).optional(),
+  satisfaccion_general: z.number().int().min(1).max(5),
+  satisfaccion_comentario: z.string().max(1000).optional().default(''),
+  facilidad_gestion: z.number().int().min(1).max(5).optional(),
+  facilidad_motivo: z.string().max(500).optional().default('')
+});
+
 app.post('/api/encuesta', async (req, res) => {
+  const parseResult = encuestaSchema.safeParse(req.body);
+
+  if (!parseResult.success) {
+    return res.status(400).json({ success: false, message: 'Faltan datos obligatorios o son inválidos', errors: parseResult.error.format() });
+  }
+
   const { 
     token, instalacion_concretada, tecnico_trato, tecnico_puntualidad, tecnico_claridad, 
     tecnico_orden, tecnico_efectividad, satisfaccion_general, satisfaccion_comentario, 
     facilidad_gestion, facilidad_motivo 
-  } = req.body;
-
-  if (!token || !satisfaccion_general) {
-    return res.status(400).json({ success: false, message: 'Faltan datos obligatorios' });
-  }
+  } = parseResult.data;
 
   try {
     const query = `
@@ -126,12 +168,21 @@ const parseUserAgent = (ua: string) => {
 };
 
 // Endpoint para guardar Logs de Interacción en BD
-app.post('/api/log', async (req, res) => {
-  const { token, evento, detalles, dispositivo } = req.body;
+const logSchema = z.object({
+  token: z.string().min(5).max(150),
+  evento: z.string().max(100),
+  detalles: z.any().optional(),
+  dispositivo: z.any().optional()
+});
 
-  if (!token || !evento) {
-    return res.status(400).json({ success: false, message: 'Faltan datos obligatorios: token y evento' });
+app.post('/api/log', async (req, res) => {
+  const parseResult = logSchema.safeParse(req.body);
+
+  if (!parseResult.success) {
+    return res.status(400).json({ success: false, message: 'Datos inválidos', errors: parseResult.error.format() });
   }
+
+  const { token, evento, detalles, dispositivo } = parseResult.data;
 
   // Obtener IP real del cliente
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
