@@ -1,0 +1,980 @@
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ArrowLeft, Phone, CheckCircle2, Calendar, User, Navigation, Wrench, Clock, MapPin, CalendarDays, XCircle, Star, BellRing } from "lucide-react";
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet-routing-machine/dist/leaflet-routing-machine.css';
+import L from 'leaflet';
+import { format } from "date-fns";
+import { es } from "date-fns/locale";
+import Routing from "@/components/Routing";
+import AnimatedMarker from "@/components/AnimatedMarker";
+import { motion, AnimatePresence } from "framer-motion";
+import { ModeToggle } from "@/components/ModeToggle";
+import logoImg from "../assets/logo-1.png";
+
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+const vehicleIcon = L.divIcon({
+  className: 'custom-vehicle-icon',
+  html: `<div style="background-color: #ff5a1f; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 12px rgba(255, 90, 31, 0.4); transition: transform 0.3s ease;">
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+  </div>`,
+  iconSize: [44, 44],
+  iconAnchor: [22, 22],
+  popupAnchor: [0, -22],
+});
+
+const destIcon = L.divIcon({
+  className: 'custom-dest-icon',
+  html: `<div style="background-color: #111827; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+  </div>`,
+  iconSize: [40, 40],
+  iconAnchor: [20, 40],
+  popupAnchor: [0, -40],
+});
+
+// Componente para animar elementos al entrar
+export interface InstalacionData {
+  idoperacion?: string | number;
+  status: 'programada' | 'asignado' | 'en_camino' | 'en_proceso' | 'finalizada' | 'cerrada' | string;
+  tecnico?: {
+    nombre: string;
+    cuadrilla: string;
+    telefono: string;
+  };
+  eta?: string;
+  trafico?: string;
+  coordenadas_cliente?: [number, number];
+  coordenadas_tecnico?: [number, number];
+  fecha_programacion?: string;
+  tramo?: string;
+}
+
+const FadeUpBox = ({ children, delay = 0 }: { children: React.ReactNode, delay?: number }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 30 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1], delay }}
+  >
+    {children}
+  </motion.div>
+);
+
+const Seguimiento = () => {
+  const { token } = useParams();
+  const navigate = useNavigate();
+  
+  const [data, setData] = useState<InstalacionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
+  const [calculatedEta, setCalculatedEta] = useState<string | null>(null);
+  const [calculatedDurationSec, setCalculatedDurationSec] = useState<number>(0);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [isReprogramModalOpen, setIsReprogramModalOpen] = useState(false);
+  const [reprogramData, setReprogramData] = useState({ fecha: '', turno: 'Mañana (8am - 12pm)', motivo: '' });
+  const [isSubmittingReprogram, setIsSubmittingReprogram] = useState(false);
+  
+  const [encuesta, setEncuesta] = useState({
+    llego_horario: '',
+    calificacion_tecnico: '',
+    explicacion_clara: '',
+    tiempo_adecuado: '',
+    informacion_clara: '',
+    probabilidad_recomendar: '',
+    comentarios: ''
+  });
+  const [isSubmittingEncuesta, setIsSubmittingEncuesta] = useState(false);
+  const [encuestaEnviada, setEncuestaEnviada] = useState(false);
+
+  // Estados para el sistema de Notificaciones
+  const previousStatus = useRef<string | null>(null);
+  const [appNotification, setAppNotification] = useState<{title: string, body: string} | null>(null);
+
+  useEffect(() => {
+    // Solicitar permiso de notificaciones al navegador al entrar a la página
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const triggerNotification = (newStatus: string, tecnicoData: any) => {
+    let title = "¡Actualización de tu servicio!";
+    let body = "";
+    
+    switch(newStatus) {
+      case 'asignado': body = `El técnico ${tecnicoData?.nombre || ''} ha sido asignado a tu instalación.`; break;
+      case 'en_camino': body = "Tu técnico ya está en camino a tu domicilio. Revisa el mapa."; break;
+      case 'en_proceso': body = "La instalación está en proceso en este momento."; break;
+      case 'finalizada': body = "Instalación completada. Por favor evalúa nuestro servicio."; break;
+      default: return;
+    }
+
+    // Mostrar Notificación dentro de la App
+    setAppNotification({ title, body });
+    setTimeout(() => setAppNotification(null), 8000);
+
+    // Lanzar Notificación Nativa del Sistema Operativo/Navegador
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, icon: logoImg });
+    }
+  };
+
+  // Obtener fecha actual en formato local YYYY-MM-DD para bloquear fechas pasadas
+  const getTodayLocal = () => {
+    const today = new Date();
+    // Ajustar a zona horaria local restando el offset
+    const localDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000));
+    return localDate.toISOString().split('T')[0];
+  };
+
+  const handleReprogramSubmit = async () => {
+    if (!reprogramData.fecha) {
+      alert("Por favor selecciona una fecha");
+      return;
+    }
+    
+    setIsSubmittingReprogram(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/reprogramar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          ...reprogramData
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        alert("¡Tu solicitud de reprogramación ha sido enviada exitosamente! Un asesor se comunicará contigo pronto.");
+        setIsReprogramModalOpen(false);
+      } else {
+        alert("Ocurrió un error. Por favor intenta de nuevo más tarde.");
+      }
+    } catch (e) {
+      alert("Error de conexión al guardar la solicitud.");
+    } finally {
+      setIsSubmittingReprogram(false);
+    }
+  };
+
+  const handleEncuestaSubmit = async () => {
+    if (!encuesta.probabilidad_recomendar) {
+      alert("Por favor bríndanos una calificación del 1 al 10 antes de enviar.");
+      return;
+    }
+
+    setIsSubmittingEncuesta(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/encuesta`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          ...encuesta
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setEncuestaEnviada(true);
+        // Guardamos en memoria del navegador que este ticket ya completó la encuesta
+        localStorage.setItem(`encuesta_completada_${token}`, 'true');
+        
+        // Forzar localmente el estado a cerrada para que desaparezca la encuesta 
+        // y se muestre la tarjeta roja de "Atención Cerrada"
+        setData(prev => prev ? { ...prev, status: 'cerrada' } : null);
+      } else {
+        alert("Ocurrió un error. Por favor intenta de nuevo más tarde.");
+      }
+    } catch (e) {
+      alert("Error de conexión al guardar la encuesta.");
+    } finally {
+      setIsSubmittingEncuesta(false);
+    }
+  };
+
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval>;
+
+    const fetchInstalacion = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/instalaciones/${token}`);
+        const result = await response.json();
+        
+        if (result.success) {
+          const fetchedData = result.data;
+
+          // 1. Verificamos memoria local (más rápido)
+          const hasCompletedSurveyLocal = localStorage.getItem(`encuesta_completada_${token}`);
+          
+          if (hasCompletedSurveyLocal === 'true') {
+            fetchedData.status = 'cerrada';
+          } else {
+            // 2. Si no está en memoria local, verificamos en el servidor (en caso abra desde otro equipo)
+            try {
+              const checkResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/encuesta/verificar/${token}`);
+              const checkResult = await checkResponse.json();
+              
+              if (checkResult.success && checkResult.completada) {
+                // Guardar en local para futuras cargas rápidas
+                localStorage.setItem(`encuesta_completada_${token}`, 'true');
+                fetchedData.status = 'cerrada';
+              }
+            } catch (e) {
+              console.error("Error verificando encuesta en servidor", e);
+            }
+          }
+          
+          // Lógica para detectar cambios y lanzar notificación
+          if (previousStatus.current && previousStatus.current !== fetchedData.status) {
+            triggerNotification(fetchedData.status, fetchedData.tecnico);
+          }
+          previousStatus.current = fetchedData.status;
+
+          setData(fetchedData);
+          setError(false);
+        } else {
+          setError(true);
+        }
+      } catch (err) {
+        console.error("Error fetching data", err);
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (token) {
+      fetchInstalacion();
+      // Polling cada 10 segundos para actualizar el estado y ubicación del técnico en tiempo real
+      intervalId = setInterval(fetchInstalacion, 10000);
+    }
+
+    return () => clearInterval(intervalId);
+  }, [token]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background pb-20">
+        <header className="bg-gradient-to-b from-primary via-primary/80 to-transparent pt-4 pb-12 relative overflow-hidden">
+          <div className="container mx-auto px-4 lg:px-8 relative z-10">
+            <div className="flex justify-between items-center mb-12">
+              <div className="w-32 h-10 bg-white/20 animate-pulse rounded-lg"></div>
+              <div className="w-32 h-10 bg-white/20 animate-pulse rounded-full"></div>
+            </div>
+            <div className="text-center pb-4 flex flex-col items-center gap-3">
+              <div className="w-64 md:w-96 h-12 bg-white/30 animate-pulse rounded-lg"></div>
+              <div className="w-32 h-6 bg-white/30 animate-pulse rounded-full"></div>
+            </div>
+          </div>
+        </header>
+
+        <main className="container mx-auto px-4 -mt-8 relative z-20">
+          <div className="max-w-4xl mx-auto space-y-8">
+            {/* Esqueleto de la barra de estados */}
+            <Card className="p-8 border-0 rounded-[2rem] bg-card shadow-lg">
+              <div className="w-full h-24 bg-muted animate-pulse rounded-2xl mb-6"></div>
+              <div className="w-3/4 h-12 bg-muted animate-pulse rounded-xl mx-auto"></div>
+            </Card>
+
+            {/* Esqueleto de info de instalación */}
+            <Card className="p-8 border-0 rounded-[2rem] bg-card shadow-lg">
+              <div className="w-48 h-8 bg-muted animate-pulse rounded-lg mb-6"></div>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="w-full h-20 bg-muted animate-pulse rounded-2xl"></div>
+                <div className="w-full h-20 bg-muted animate-pulse rounded-2xl"></div>
+              </div>
+            </Card>
+
+            {/* Esqueleto de mapa */}
+            <Card className="p-0 border-0 rounded-[2rem] bg-card shadow-lg overflow-hidden">
+              <div className="p-6 sm:p-8 border-b border-border/50 bg-muted/10">
+                <div className="w-64 h-8 bg-muted animate-pulse rounded-lg"></div>
+              </div>
+              <div className="p-6 sm:p-8">
+                <div className="w-full h-[350px] bg-muted animate-pulse rounded-[2rem]"></div>
+              </div>
+            </Card>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background flex-col gap-4">
+        <h1 className="text-2xl font-bold text-foreground">Instalación no encontrada</h1>
+        <p className="text-muted-foreground">El link de seguimiento proporcionado es inválido o la operación no existe en la base de datos.</p>
+        <Button onClick={() => navigate('/')}>Volver al inicio</Button>
+      </div>
+    );
+  }
+
+  const { status, tecnico, eta, fecha_programacion, tramo } = data;
+
+  // Si la BBDD nos da coordenadas, las usamos, sino usamos las de por defecto (San Isidro)
+  const position: [number, number] = data.coordenadas_cliente || [-12.0971, -77.0369];
+  const vehiclePosition: [number, number] = data.coordenadas_tecnico || [-12.0950, -77.0320];
+
+  const steps = [
+    { id: 'programada', label: 'Programada', sub: 'Instalación programada', icon: Calendar },
+    { id: 'asignado', label: 'Técnico Asignado', sub: 'Tenemos un técnico para ti', icon: User },
+    { id: 'en_camino', label: 'Técnico en Camino', sub: 'El técnico está en camino', icon: Navigation },
+    { id: 'en_proceso', label: 'En Proceso', sub: 'Instalación en progreso', icon: Wrench },
+    { id: 'finalizada', label: 'Finalizada', sub: '¡Todo listo!', icon: CheckCircle2 },
+  ];
+
+  const statusIndex = ['programada', 'asignado', 'en_camino', 'en_proceso', 'finalizada', 'cerrada'].indexOf(status);
+  const progressWidth = `${(statusIndex / (steps.length - 1)) * 100}%`;
+
+  const getMessage = () => {
+    // Si la atención está cerrada porque acaba de llenar la encuesta o ya la había llenado
+    if (status === 'cerrada' && (encuestaEnviada || localStorage.getItem(`encuesta_completada_${token}`) === 'true')) {
+      return '¡Muchas gracias por tus comentarios! Bienvenido a la familia de Perú Fibra. Disfruta de la mejor conexión.';
+    }
+    
+    switch (status) {
+      case 'programada': return 'Tu instalación está programada. Te avisaremos cuando se asigne un técnico.';
+      case 'asignado': return '¡Excelente! Ya tenemos un técnico asignado para tu instalación, te avisaremos cuando el técnico esté en camino.';
+      case 'en_camino': return '¡Tu técnico está en camino! Puedes ver su ubicación en tiempo real.';
+      case 'en_proceso': return 'Tu instalación está siendo realizada en este momento.';
+      case 'finalizada': return '¡Tu instalación ha sido completada exitosamente! Por favor, cuéntanos sobre tu experiencia.';
+      case 'cerrada': return 'Tu atención ha sido cerrada, comunícate con ATC para tener mayor información.';
+      default: return '';
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }} 
+      animate={{ opacity: 1 }} 
+      exit={{ opacity: 0 }}
+      className="min-h-screen bg-background pb-20 transition-colors duration-300"
+    >
+                  <header className="bg-gradient-to-b from-primary via-primary/80 to-transparent pt-4 pb-12 relative overflow-hidden">
+        {/* Decorative background shapes */}
+        <div className="absolute top-0 right-0 w-full h-full bg-[url('data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'0.05\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E')] opacity-50"></div>
+        
+        <div className="container mx-auto px-4 lg:px-8 relative z-10">
+          <div className="flex justify-between items-center mb-12">
+            <div className="flex items-center gap-6">
+              <div className="flex items-center cursor-pointer" onClick={() => navigate('/')}>
+                <img src={logoImg} alt="Peru Fibra" className="h-6 md:h-8 lg:h-10 w-auto object-contain drop-shadow-lg transition-all" />
+              </div>
+              <div className="hidden md:block pl-6 border-l-2 border-white/20">
+                <button onClick={() => navigate('/')} className="flex items-center text-sm font-bold text-white/80 hover:text-white transition-colors uppercase tracking-wider">
+                  <ArrowLeft className="w-4 h-4 mr-2" /> Volver al Portal
+                </button>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              <ModeToggle />
+            </div>
+          </div>
+
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            className="text-center pb-4"
+          >
+            <h1 className="text-3xl md:text-5xl font-black mb-3 tracking-tight text-white drop-shadow-md" style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}>
+              Seguimiento de Instalación
+            </h1>
+            <p className="text-black font-black text-sm tracking-widest uppercase bg-secondary inline-block px-5 py-1.5 rounded-full shadow-md">
+              Ticket: #{data.idoperacion || token}
+            </p>
+          </motion.div>
+        </div>
+      </header>
+
+      <main className="container mx-auto px-4 -mt-8 relative z-20">
+        <div className="max-w-4xl mx-auto space-y-8">
+          
+          {status === 'cerrada' ? (
+            <FadeUpBox delay={0.1}>
+              <Card className="p-8 shadow-xl shadow-black/5 border-0 rounded-[2rem] bg-card text-center relative overflow-hidden">
+                {/* Mostrar un diseño más feliz si es porque terminó la encuesta */}
+                {(encuestaEnviada || localStorage.getItem(`encuesta_completada_${token}`) === 'true') ? (
+                  <>
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-yellow-500/10 rounded-bl-[100px] -z-10"></div>
+                    <div className="absolute bottom-0 left-0 w-32 h-32 bg-primary/5 rounded-tr-[100px] -z-10"></div>
+                    
+                    <div className="w-24 h-24 bg-green-100 dark:bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+                      <Star className="w-12 h-12 text-green-500" />
+                    </div>
+                    <h2 className="text-3xl font-black text-foreground mb-4">¡Instalación Finalizada!</h2>
+                    <p className="text-lg text-muted-foreground mb-8 font-medium px-4">
+                      {getMessage()}
+                    </p>
+                    
+                    <div className="bg-muted/30 rounded-2xl p-6 border border-border/50 max-w-md mx-auto">
+                      <p className="text-sm text-foreground font-bold mb-3 uppercase tracking-wider">Nuestros canales de atención</p>
+                      <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                        <Button 
+                          onClick={() => window.open('tel:017546000')} 
+                          className="bg-secondary hover:bg-yellow-500 text-black font-bold rounded-xl shadow-md"
+                        >
+                          <Phone className="w-4 h-4 mr-2" /> Central: 01 754 6000
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <XCircle className="w-10 h-10 text-primary" />
+                    </div>
+                    <h2 className="text-3xl font-black text-foreground mb-4">Atención Cerrada</h2>
+                    <p className="text-lg text-muted-foreground mb-8 font-medium">
+                      {getMessage()}
+                    </p>
+                    <Button 
+                      onClick={() => window.open('tel:017546000')} 
+                      className="bg-secondary hover:bg-yellow-500 text-black font-bold rounded-xl h-14 px-8 shadow-lg"
+                    >
+                      <Phone className="w-5 h-5 mr-2" /> Llamar a ATC
+                    </Button>
+                  </>
+                )}
+              </Card>
+            </FadeUpBox>
+          ) : (
+            <>
+              <FadeUpBox delay={0.1}>
+            <Card className="p-8 shadow-xl shadow-black/5 border-0 rounded-[2rem] bg-card overflow-hidden">
+              <div className="relative overflow-x-auto pb-4 scrollbar-hide">
+                <div className="min-w-[600px] px-4">
+                  <div className="absolute top-10 left-16 right-16 h-1.5 bg-muted rounded-full -z-10">
+                    <div className="h-full animated-progress-line rounded-full transition-all duration-1000 ease-out" style={{ width: progressWidth }}></div>
+                  </div>
+
+                  <div className="flex justify-between relative">
+                    {steps.map((step, i) => {
+                      const isPast = i < statusIndex;
+                      const isCurrent = i === statusIndex;
+                      const Icon = step.icon;
+                      return (
+                        <div key={step.id} className="flex flex-col items-center w-32 shrink-0">
+                          <motion.div 
+                            whileHover={{ scale: 1.05 }}
+                            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center mb-4 transition-all duration-500 ${
+                            isPast ? 'bg-secondary text-black shadow-lg shadow-secondary/30' : 
+                            isCurrent ? 'bg-primary text-white shadow-xl shadow-primary/40 ring-4 ring-primary/20' : 
+                            'bg-card border-2 border-muted text-muted-foreground'
+                          }`}>
+                            <Icon className="w-7 h-7 sm:w-8 sm:h-8" />
+                          </motion.div>
+                          <span className={`font-black text-sm text-center mb-1 ${isPast ? 'text-yellow-600 dark:text-secondary' : isCurrent ? 'text-primary' : 'text-muted-foreground'}`}>
+                            {step.label}
+                          </span>
+                          <span className="text-[11px] leading-tight text-muted-foreground text-center px-2 font-medium">{step.sub}</span>
+                          {isCurrent && (
+                            <motion.span 
+                              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                              className="mt-3 text-[10px] uppercase tracking-wider bg-secondary text-black px-3 py-1 rounded-full font-black shadow-sm"
+                            >
+                              Estado actual
+                            </motion.span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 bg-yellow-50 dark:bg-secondary/10 border border-secondary/50 rounded-2xl p-5 text-center">
+                <p className="text-gray-900 dark:text-white font-bold text-lg">{getMessage()}</p>
+              </div>
+            </Card>
+          </FadeUpBox>
+
+          {/* Información de la Instalación (Fecha y Tramo) */}
+          <AnimatePresence>
+            {status !== 'finalizada' && (
+              <FadeUpBox delay={0.15}>
+                <Card className="p-8 shadow-lg shadow-black/5 border-0 rounded-[2rem] bg-card">
+                  <div className="flex items-center gap-3 mb-6">
+                    <CalendarDays className="w-6 h-6 text-primary" />
+                    <h2 className="text-2xl font-bold text-foreground">Información de tu Instalación</h2>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div className="flex items-center gap-4 bg-muted/30 p-5 rounded-2xl border border-border/50">
+                      <div className="w-12 h-12 rounded-full bg-accent flex items-center justify-center shrink-0 shadow-inner">
+                        <Calendar className="w-6 h-6 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground font-medium mb-1">Fecha programada</p>
+                        <p className="font-bold text-lg text-foreground">
+                          {fecha_programacion ? format(new Date(fecha_programacion), "EEEE, d 'de' MMMM", { locale: es }) : "Día no asignado"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 bg-muted/30 p-5 rounded-2xl border border-border/50">
+                      <div className="w-12 h-12 rounded-full bg-accent flex items-center justify-center shrink-0 shadow-inner">
+                        <Clock className="w-6 h-6 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground font-medium mb-1">Tramo de atención</p>
+                        <div className="bg-primary text-primary-foreground px-3 py-1 rounded-full text-sm font-bold inline-block shadow-sm">
+                          {tramo || "Por definir"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </FadeUpBox>
+            )}
+          </AnimatePresence>
+
+          {/* Técnico Asignado */}
+          <AnimatePresence>
+            {tecnico && status !== 'finalizada' && (
+              <FadeUpBox delay={0.2}>
+                <Card className="p-8 shadow-lg shadow-black/5 border-0 rounded-[2rem] bg-card">
+                  <div className="flex items-center gap-3 mb-6">
+                    <User className="w-6 h-6 text-primary" />
+                    <h2 className="text-2xl font-bold text-foreground">Tu Técnico Asignado</h2>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 bg-muted/30 p-6 rounded-3xl border border-border/50">
+                    <div className="w-20 h-20 rounded-full bg-accent flex items-center justify-center shrink-0 shadow-inner">
+                      <User className="w-10 h-10 text-primary" />
+                    </div>
+                    <div className="flex-1 text-center sm:text-left">
+                      <p className="font-bold text-2xl text-foreground mb-4">
+                        {tecnico.nombre.split(' ').slice(1).join(' ') || tecnico.nombre}
+                      </p>
+                      <Button 
+                        onClick={() => window.open('tel:017546000')}
+                        className="w-full sm:w-auto bg-primary hover:bg-primary-light text-primary-foreground rounded-xl shadow-lg shadow-primary/20 transition-all hover:shadow-primary/40"
+                      >
+                        <Phone className="w-4 h-4 mr-2" />
+                        Llamar a Central (01 754 6000)
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              </FadeUpBox>
+            )}
+          </AnimatePresence>
+
+          {/* Mapa */}
+          <AnimatePresence>
+            {(status === 'programada' || status === 'asignado' || status === 'en_camino') && (
+              <FadeUpBox delay={0.3}>
+                <Card className="p-0 shadow-xl shadow-black/5 border-0 rounded-[2rem] overflow-hidden bg-card">
+                  <div className="p-6 sm:p-8 border-b border-border/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-muted/10">
+                    <div className="flex items-center gap-3">
+                      <Navigation className="w-7 h-7 text-primary" />
+                      <h2 className="text-2xl font-bold text-foreground">
+                        {status === 'en_camino' ? 'Ubicación en Tiempo Real' : 'Tu Ubicación'}
+                      </h2>
+                    </div>
+                    {(calculatedEta || eta) && status === 'en_camino' && (
+                      <motion.div 
+                        initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                        className="bg-accent text-accent-foreground px-4 py-2 rounded-full text-sm font-bold flex items-center gap-2 shadow-sm"
+                      >
+                        <Clock className="w-4 h-4 animate-pulse" /> {calculatedEta || eta}
+                      </motion.div>
+                    )}
+                  </div>
+
+                  <div className="p-6 sm:p-8">
+                    <div className="h-[350px] w-full rounded-[2rem] overflow-hidden border-4 border-muted relative z-0 shadow-inner">
+                      <MapContainer center={position} zoom={15} scrollWheelZoom={false} className="h-full w-full">
+                        {/* Capa de mapa limpia y moderna (CartoDB Positron) */}
+                        <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" attribution='&copy; <a href="https://carto.com/">CartoDB</a>' />
+                        <Marker position={position} icon={destIcon}><Popup>Tu dirección</Popup></Marker>
+                        {status === 'en_camino' && (
+                          <>
+                            <Routing 
+                              start={vehiclePosition} 
+                              end={position} 
+                              onRouteCalculated={(coords, timeInSeconds) => {
+                                setRoutePoints(coords);
+                                setCalculatedDurationSec(timeInSeconds);
+                                const minutes = Math.ceil(timeInSeconds / 60);
+                                
+                                // Calcular hora de llegada
+                                const arrivalTime = new Date();
+                                arrivalTime.setMinutes(arrivalTime.getMinutes() + minutes);
+                                const timeFormat = arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                                setCalculatedEta(`Llega en ${minutes} min (Aprox. ${timeFormat})`);
+                              }} 
+                            />
+                            {routePoints.length > 0 ? (
+                               <AnimatedMarker 
+                                 routePoints={routePoints} 
+                                 durationSeconds={calculatedDurationSec}
+                                 icon={vehicleIcon} 
+                                 popupText="El técnico está en camino" 
+                               />
+                            ) : (
+                               <Marker position={vehiclePosition} icon={vehicleIcon}><Popup>El técnico</Popup></Marker>
+                            )}
+                          </>
+                        )}
+                      </MapContainer>
+                    </div>
+
+                    <div className="mt-6 flex flex-col sm:flex-row gap-4">
+                       <div className="flex-1 flex items-start gap-4 bg-muted/30 p-5 rounded-2xl border border-border/50">
+                        <div className="mt-1 bg-card p-2 rounded-full shadow-sm">
+                          <MapPin className="w-5 h-5 text-primary shrink-0" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-foreground mb-1">Tu dirección de instalación</p>
+                          <p className="text-muted-foreground text-sm leading-relaxed">Calle Las Magnolias 156, San Isidro, Lima. <br/>Asegúrate de estar presente en el domicilio.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              </FadeUpBox>
+            )}
+          </AnimatePresence>
+
+          {/* Encuesta (Solo Finalizada) */}
+          <AnimatePresence>
+            {status === 'finalizada' && !encuestaEnviada && (
+              <FadeUpBox delay={0.4}>
+                <Card className="p-8 shadow-xl shadow-black/5 border-0 rounded-[2rem] bg-card">
+                  <div className="flex items-center gap-3 mb-8">
+                    <Star className="w-8 h-8 text-yellow-400 fill-yellow-400" />
+                    <h2 className="text-2xl font-bold text-foreground">Cuéntanos sobre tu experiencia</h2>
+                  </div>
+                  
+                  <div className="space-y-8">
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿El técnico llegó dentro del horario acordado?</p>
+                      <div className="flex gap-6">
+                        <label className="flex items-center gap-3 cursor-pointer group">
+                          <input type="radio" name="q1" value="Sí" onChange={(e) => setEncuesta({...encuesta, llego_horario: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                          <span className="font-medium group-hover:text-primary transition-colors">Sí</span>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer group">
+                          <input type="radio" name="q1" value="No" onChange={(e) => setEncuesta({...encuesta, llego_horario: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                          <span className="font-medium group-hover:text-primary transition-colors">No</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿Cómo calificaría la amabilidad y profesionalismo del técnico?</p>
+                      <div className="flex flex-col gap-3">
+                        {['Excelente', 'Bueno', 'Aceptable', 'Malo', 'Muy malo'].map(opt => (
+                          <label key={opt} className="flex items-center gap-3 cursor-pointer group">
+                            <input type="radio" name="q2" value={opt} onChange={(e) => setEncuesta({...encuesta, calificacion_tecnico: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                            <span className="font-medium group-hover:text-primary transition-colors">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿El técnico explicó de manera clara cómo utilizar su servicio de Internet?</p>
+                      <div className="flex flex-col gap-3">
+                        {['Sí, muy claro', 'Sí, algo claro', 'No, no explicó bien', 'No, no me explicó nada'].map(opt => (
+                          <label key={opt} className="flex items-center gap-3 cursor-pointer group">
+                            <input type="radio" name="q3" value={opt} onChange={(e) => setEncuesta({...encuesta, explicacion_clara: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                            <span className="font-medium group-hover:text-primary transition-colors">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿El proceso de instalación se realizó en el tiempo adecuado?</p>
+                      <div className="flex flex-col gap-3">
+                        {['Sí, completamente', 'Sí, fue adecuado', 'Fue lento', 'No, fue muy lento'].map(opt => (
+                          <label key={opt} className="flex items-center gap-3 cursor-pointer group">
+                            <input type="radio" name="q4" value={opt} onChange={(e) => setEncuesta({...encuesta, tiempo_adecuado: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                            <span className="font-medium group-hover:text-primary transition-colors">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿La información en esta página fue clara y suficiente para entender todo el proceso de instalación?</p>
+                      <div className="flex flex-col gap-3">
+                        {['Sí, completamente', 'En su mayoría, sí', 'No, faltaba información', 'No, fue confusa'].map(opt => (
+                          <label key={opt} className="flex items-center gap-3 cursor-pointer group">
+                            <input type="radio" name="q5" value={opt} onChange={(e) => setEncuesta({...encuesta, informacion_clara: e.target.value})} className="accent-primary w-5 h-5 cursor-pointer" /> 
+                            <span className="font-medium group-hover:text-primary transition-colors">{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">¿Qué tan probable es que nos recomiende a sus amigos o familiares?</p>
+                      <p className="text-sm text-muted-foreground mb-4">1 = Nada probable, 10 = Muy probable</p>
+                      <div className="flex flex-wrap gap-2 sm:gap-3">
+                        {[1,2,3,4,5,6,7,8,9,10].map(num => (
+                          <label key={num} className="flex-1 min-w-[45px]">
+                            <div className="relative group">
+                              <input type="radio" name="nps" value={num} onChange={(e) => setEncuesta({...encuesta, probabilidad_recomendar: e.target.value})} className="peer absolute opacity-0 w-full h-full cursor-pointer z-10" />
+                              <div className="border-2 border-border rounded-xl text-center py-3 font-bold text-muted-foreground peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground group-hover:border-primary/50 transition-all shadow-sm">
+                                {num}
+                              </div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-muted/30 rounded-3xl border border-border/50">
+                      <p className="font-bold mb-4 text-foreground text-lg">Comentarios adicionales</p>
+                      <textarea 
+                        value={encuesta.comentarios}
+                        onChange={(e) => setEncuesta({...encuesta, comentarios: e.target.value})}
+                        className="w-full bg-card border-2 border-border rounded-xl p-5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all resize-none shadow-inner" 
+                        rows={4} 
+                        placeholder="Escribe aquí cualquier detalle sobre tu instalación..."
+                      ></textarea>
+                    </div>
+
+                    <Button 
+                      onClick={handleEncuestaSubmit}
+                      disabled={isSubmittingEncuesta}
+                      className="w-full bg-primary hover:bg-primary-light text-primary-foreground h-16 text-xl rounded-2xl shadow-xl shadow-primary/30 transition-all hover:-translate-y-1">
+                      {isSubmittingEncuesta ? "Enviando..." : "Enviar respuestas"}
+                    </Button>
+                  </div>
+                </Card>
+              </FadeUpBox>
+            )}
+
+            {status === 'finalizada' && encuestaEnviada && (
+              <FadeUpBox delay={0.2}>
+                <Card className="p-8 shadow-xl shadow-black/5 border-0 rounded-[2rem] bg-card text-center">
+                  <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <CheckCircle2 className="w-10 h-10 text-green-500" />
+                  </div>
+                  <h2 className="text-3xl font-black text-foreground mb-4">¡Gracias por tus comentarios!</h2>
+                  <p className="text-lg text-muted-foreground">Tu opinión nos ayuda a seguir mejorando para darte el mejor servicio.</p>
+                </Card>
+              </FadeUpBox>
+            )}
+          </AnimatePresence>
+
+          {/* Botones de Acción */}
+          <FadeUpBox delay={0.5}>
+            <div className="space-y-4 pt-4 pb-10">
+              {status !== 'finalizada' && status !== 'cerrada' && (
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <Button 
+                    onClick={() => setIsReprogramModalOpen(true)}
+                    className="flex-1 bg-card hover:bg-muted text-foreground border-2 border-border h-16 text-lg rounded-2xl flex items-center justify-center gap-3 transition-all hover:border-primary/50 shadow-sm"
+                  >
+                    <CalendarDays className="w-6 h-6 text-primary" /> <span className="font-bold">Reprogramar</span>
+                  </Button>
+                  <Button 
+                    variant="destructive" 
+                    onClick={() => setIsCancelModalOpen(true)}
+                    className="flex-1 h-16 text-lg rounded-2xl flex items-center justify-center gap-3 transition-all shadow-lg shadow-destructive/20"
+                  >
+                    <XCircle className="w-6 h-6" /> <span className="font-bold">Cancelar</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+          </FadeUpBox>
+          </>
+          )}
+        </div>
+      </main>
+
+      {/* Modal de Cancelación */}
+      <AnimatePresence>
+        {isCancelModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white dark:bg-card p-8 rounded-3xl shadow-2xl max-w-md w-full border-t-8 border-t-primary"
+            >
+              <div className="flex flex-col items-center text-center">
+                <div className="w-20 h-20 bg-red-100 dark:bg-red-500/20 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                  <XCircle className="w-10 h-10 text-primary" />
+                </div>
+                <h3 className="text-2xl font-black text-gray-900 dark:text-white mb-3" style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}>
+                  ¿Deseas cancelar?
+                </h3>
+                <p className="text-gray-600 dark:text-gray-300 mb-8 font-medium text-lg leading-relaxed">
+                  Si deseas cancelar tu atención por favor comunícate a nuestros canales de atención.
+                </p>
+                <div className="flex flex-col w-full gap-3">
+                  <Button 
+                    className="w-full bg-secondary hover:bg-yellow-500 text-black rounded-xl h-14 text-lg font-bold shadow-lg transition-transform hover:-translate-y-1" 
+                    onClick={() => window.open('tel:017546000')}
+                  >
+                    <Phone className="w-5 h-5 mr-2" /> Llamar a Central
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full rounded-xl h-14 text-lg font-bold border-2 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800" 
+                    onClick={() => setIsCancelModalOpen(false)}
+                  >
+                    Volver al seguimiento
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Reprogramación */}
+      <AnimatePresence>
+        {isReprogramModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white dark:bg-card p-8 rounded-3xl shadow-2xl max-w-lg w-full border-t-8 border-t-secondary"
+            >
+              <div className="flex flex-col">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-12 h-12 bg-yellow-100 dark:bg-yellow-500/20 rounded-full flex items-center justify-center shadow-inner">
+                    <CalendarDays className="w-6 h-6 text-secondary" />
+                  </div>
+                  <h3 className="text-2xl font-black text-gray-900 dark:text-white" style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}>
+                    Reprogramar Instalación
+                  </h3>
+                </div>
+                
+                <p className="text-gray-600 dark:text-gray-300 mb-6 font-medium">
+                  Elige la nueva fecha y turno en la que deseas que te visitemos. Un asesor te contactará para confirmar la disponibilidad.
+                </p>
+
+                <div className="space-y-5 mb-8">
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Nueva Fecha Sugerida</label>
+                    <input 
+                      type="date" 
+                      min={getTodayLocal()}
+                      value={reprogramData.fecha}
+                      onChange={(e) => setReprogramData({...reprogramData, fecha: e.target.value})}
+                      className="w-full h-12 px-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:border-secondary focus:ring-0 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Turno de Preferencia</label>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <label className="flex-1 cursor-pointer">
+                        <input type="radio" name="turno" value="Mañana (8am - 12pm)" checked={reprogramData.turno === 'Mañana (8am - 12pm)'} onChange={(e) => setReprogramData({...reprogramData, turno: e.target.value})} className="peer hidden" />
+                        <div className="text-center py-2.5 px-1 rounded-xl border-2 border-gray-200 dark:border-gray-700 peer-checked:border-secondary peer-checked:bg-yellow-50 dark:peer-checked:bg-yellow-500/10 font-bold text-gray-600 dark:text-gray-400 peer-checked:text-black dark:peer-checked:text-secondary transition-all text-xs lg:text-sm">
+                          8am - 12pm
+                        </div>
+                      </label>
+                      <label className="flex-1 cursor-pointer">
+                        <input type="radio" name="turno" value="Tarde (12pm - 4pm)" checked={reprogramData.turno === 'Tarde (12pm - 4pm)'} onChange={(e) => setReprogramData({...reprogramData, turno: e.target.value})} className="peer hidden" />
+                        <div className="text-center py-2.5 px-1 rounded-xl border-2 border-gray-200 dark:border-gray-700 peer-checked:border-secondary peer-checked:bg-yellow-50 dark:peer-checked:bg-yellow-500/10 font-bold text-gray-600 dark:text-gray-400 peer-checked:text-black dark:peer-checked:text-secondary transition-all text-xs lg:text-sm">
+                          12pm - 4pm
+                        </div>
+                      </label>
+                      <label className="flex-1 cursor-pointer">
+                        <input type="radio" name="turno" value="Noche (4pm - 8pm)" checked={reprogramData.turno === 'Noche (4pm - 8pm)'} onChange={(e) => setReprogramData({...reprogramData, turno: e.target.value})} className="peer hidden" />
+                        <div className="text-center py-2.5 px-1 rounded-xl border-2 border-gray-200 dark:border-gray-700 peer-checked:border-secondary peer-checked:bg-yellow-50 dark:peer-checked:bg-yellow-500/10 font-bold text-gray-600 dark:text-gray-400 peer-checked:text-black dark:peer-checked:text-secondary transition-all text-xs lg:text-sm">
+                          4pm - 8pm
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Motivo del cambio (Opcional)</label>
+                    <textarea 
+                      rows={2}
+                      value={reprogramData.motivo}
+                      onChange={(e) => setReprogramData({...reprogramData, motivo: e.target.value})}
+                      className="w-full p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:border-secondary focus:ring-0 outline-none resize-none"
+                      placeholder="Ej: Tengo una emergencia médica..."
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button 
+                    variant="outline" 
+                    className="flex-1 rounded-xl h-14 text-lg font-bold border-2" 
+                    onClick={() => setIsReprogramModalOpen(false)}
+                    disabled={isSubmittingReprogram}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button 
+                    className="flex-1 bg-secondary hover:bg-yellow-500 text-black rounded-xl h-14 text-lg font-bold shadow-lg" 
+                    onClick={handleReprogramSubmit}
+                    disabled={isSubmittingReprogram}
+                  >
+                    {isSubmittingReprogram ? "Enviando..." : "Enviar Solicitud"}
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {/* Notificación In-App Flotante */}
+      <AnimatePresence>
+        {appNotification && (
+          <motion.div
+            initial={{ opacity: 0, x: 50, scale: 0.9 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 50, scale: 0.9 }}
+            className="fixed top-24 right-4 sm:right-8 z-[100] bg-white border-l-8 border-primary p-4 rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.2)] max-w-sm flex items-start gap-4"
+          >
+            <div className="bg-red-50 p-3 rounded-full shrink-0">
+              <BellRing className="w-6 h-6 text-primary animate-bounce" />
+            </div>
+            <div className="pr-4">
+              <h4 className="font-black text-gray-900 text-lg leading-tight" style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}>
+                {appNotification.title}
+              </h4>
+              <p className="text-sm text-gray-600 mt-1 font-medium">{appNotification.body}</p>
+            </div>
+            <button onClick={() => setAppNotification(null)} className="text-gray-400 hover:text-gray-600 absolute top-2 right-2">
+              <XCircle className="w-5 h-5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+};
+
+export default Seguimiento;

@@ -1,0 +1,1 @@
+const fs = require('fs'); const file = fs.readFileSync('src/pages/Seguimiento.tsx', 'utf8'); const f2 = file.replace('const { status, tecnico, eta, fecha_programacion, tramo } = data;', 'const { status, tecnico, eta, fecha_programacion } = data;'); fs.writeFileSync('src/pages/Seguimiento.tsx', f2, 'utf8');  
