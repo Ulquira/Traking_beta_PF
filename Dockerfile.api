@@ -1,23 +1,17 @@
-# Stage 1: Dependencias
-FROM node:20-alpine AS deps
+# Stage 1: Build
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-# Instalamos TODO (incluyendo devDependencies como tsx)
 RUN npm ci
+COPY ./server ./server
+RUN npx -y esbuild server/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/server/index.js
 
-# Stage 2: Producción
+# Stage 2: Producci�n
 FROM node:20-alpine AS runner
 WORKDIR /app
-
-# Copiamos package.json
 COPY package*.json ./
-# Instalamos SOLO producción, excluyendo dependencias pesadas como playwright
-RUN npm ci --omit=dev && npm install tsx --no-save
-
-# Copiamos solo el backend
-COPY ./server ./server
-COPY ./capa_intermedia ./capa_intermedia
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist/server/index.js ./server/index.js
 
 EXPOSE 3001
-
-CMD ["npx", "tsx", "server/index.ts"]
+CMD ["node", "server/index.js"]

@@ -3,3 +3,10 @@ dist
 .env
 .git
 backup
+
+scripts
+mockups
+*.md
+*.cjs
+*.bak
+*.txt

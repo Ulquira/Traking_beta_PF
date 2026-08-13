@@ -55,14 +55,24 @@ DEPLOY_CMD="gcloud run deploy ${SERVICE_NAME} \
   --region ${REGION} \
   --port ${PORT} \
   --memory 512Mi \
-  --set-env-vars DB_USER=Quantum,DB_PASSWORD=Tonoso.33,DB_NAME=BBDD,DB_PORT=3306,PORT=${PORT},SECRET_API_KEY=LLAVE_SECRETA_DEL_TERCERO_123 \
+  --set-env-vars DB_USER=Quantum,DB_NAME=BBDD,DB_PORT=3306,PORT=${PORT} \
+  --set-secrets="DB_PASSWORD=db-password:latest,SECRET_API_KEY=api-secret:latest" \
   --no-allow-unauthenticated \
   --service-account=${SERVICE_ACCOUNT}"
 
 # Si es API, agregar CAPA_INTERMEDIA_URL
 if [ "$1" = "api" ]; then
+    echo -e "${YELLOW}🔍 Obteniendo URL de Capa Intermedia...${NC}"
+    CAPA_URL=$(gcloud run services describe capa-intermedia --region ${REGION} --format="value(status.url)" 2>/dev/null)
+    
+    if [ -z "$CAPA_URL" ]; then
+        echo -e "${YELLOW}⚠️ No se pudo obtener la URL de capa-intermedia. Usando variable estática.${NC}"
+        CAPA_URL="https://capa-intermedia-xxxxx.run.app"
+    fi
+    
+    echo -e "${GREEN}✅ URL de Capa Intermedia: ${CAPA_URL}${NC}"
     DEPLOY_CMD="${DEPLOY_CMD} \
-  --set-env-vars CAPA_INTERMEDIA_URL=https://capa-intermedia-xxxxx.run.app"
+  --set-env-vars CAPA_INTERMEDIA_URL=${CAPA_URL}"
 fi
 
 eval ${DEPLOY_CMD} || { echo -e "${RED}Error en deploy${NC}"; exit 1; }
