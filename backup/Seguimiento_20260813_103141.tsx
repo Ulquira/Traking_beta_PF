@@ -2,14 +2,18 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
-import { Phone, CheckCircle2, User, XCircle, Star, Bell, Check, MapPin, AlertTriangle, ArrowLeft, CalendarDays, ChevronDown } from "lucide-react";
+import { Phone, CheckCircle2, User, XCircle, Star, Bell, Check, MapPin, AlertTriangle, ArrowLeft } from "lucide-react";
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet-routing-machine/dist/leaflet-routing-machine.css';
+import L from 'leaflet';
 import { format } from "date-fns";
-import { es } from "date-fns/locale";
 
+import Routing from "@/components/Routing";
+import AnimatedMarker from "@/components/AnimatedMarker";
 import { motion, AnimatePresence } from "framer-motion";
-import { MainLogo } from "@/components/MainLogo";
+import { PeruFibraLogo } from "@/components/PeruFibraLogo";
 import { trackEvent } from "@/lib/firebaseConfig";
-import TrackingMap from "@/components/seguimiento/TrackingMap";
 
 const parseSafeDate = (dateStr?: string) => {
   if (!dateStr) return null;
@@ -21,6 +25,34 @@ const parseSafeDate = (dateStr?: string) => {
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? null : d;
 };
+
+
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+ iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+ iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+ shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+const vehicleIcon = L.divIcon({
+ className: 'custom-vehicle-icon',
+ html: `<div style="background-color: #E3001B; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 12px rgba(227, 0, 27, 0.4); transition: transform 0.3s ease;">
+ <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+ </div>`,
+ iconSize: [44, 44],
+ iconAnchor: [22, 22],
+ popupAnchor: [0, -22],
+});
+
+const destIcon = L.divIcon({
+ className: 'custom-dest-icon',
+ html: `<div style="background-color: #111827; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+ <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+ </div>`,
+ iconSize: [40, 40],
+ iconAnchor: [20, 40],
+ popupAnchor: [0, -40],
+});
 
 // Componente para animar elementos al entrar
 export interface InstalacionData {
@@ -54,14 +86,14 @@ const Seguimiento = () => {
 
  const [routePoints, setRoutePoints] = useState<[number, number][]>([]);
  const [calculatedEta, setCalculatedEta] = useState<string | null>(null);
- const [, setCalculatedDurationSec] = useState<number>(0);
+ const [calculatedDurationSec, setCalculatedDurationSec] = useState<number>(0);
  // Estado para manejar el tiempo restante actual en segundos
  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
  
  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
  const [isReprogramModalOpen, setIsReprogramModalOpen] = useState(false);
  const [reprogramStep, setReprogramStep] = useState<'confirm_initial' | 'form' | 'success'>('confirm_initial');
- const [reprogramData, setReprogramData] = useState({ fecha: '', turno: '', motivo: '', motivoSeleccionado: '' });
+ const [reprogramData, setReprogramData] = useState({ fecha: '', turno: '', motivo: '', motivoSeleccionado: '', pin_confirmacion: '' });
  const [isSubmittingReprogram, setIsSubmittingReprogram] = useState(false);
  
  const [encuesta, setEncuesta] = useState({
@@ -182,7 +214,10 @@ const Seguimiento = () => {
  };
 
  const handleReprogramSubmit = async () => {
- 
+ if (reprogramData.pin_confirmacion !== data?.token_inicio) {
+   alert("El PIN de seguridad ingresado es incorrecto.");
+   return;
+ }
 
  setIsSubmittingReprogram(true);
  try {
@@ -210,17 +245,8 @@ const Seguimiento = () => {
  };
 
  const handleEncuestaSubmit = async () => {
- if (
-   !encuesta.instalacion_concretada || 
-   !encuesta.tecnico_trato || 
-   !encuesta.tecnico_puntualidad || 
-   !encuesta.tecnico_claridad || 
-   !encuesta.tecnico_orden || 
-   !encuesta.tecnico_efectividad || 
-   !encuesta.satisfaccion_general || 
-   !encuesta.facilidad_gestion
- ) {
- alert("Por favor responde todas las preguntas antes de enviar.");
+ if (!encuesta.instalacion_concretada || !encuesta.satisfaccion_general || !encuesta.facilidad_gestion) {
+ alert("Por favor responde las preguntas principales antes de enviar.");
  return;
  }
 
@@ -301,36 +327,6 @@ const Seguimiento = () => {
         
         if (result.success) {
           const fetchedData = result.data;
-          
-          // MAPEO DE NUEVOS ESTADOS DE BD A ESTADOS INTERNOS DE UI
-          const dbStatus = fetchedData.status ? fetchedData.status.toLowerCase().trim() : '';
-          let mappedStatus = fetchedData.status;
-
-          switch (dbStatus) {
-            case 'pendiente':
-              mappedStatus = 'programada';
-              break;
-            case 'agendada':
-              mappedStatus = 'asignado';
-              break;
-            case 'en camino':
-              mappedStatus = 'en_camino';
-              break;
-            case 'iniciada':
-              mappedStatus = 'en_proceso';
-              break;
-            case 'finalizada':
-              mappedStatus = 'finalizada';
-              break;
-            case 'anulada':
-            case 'regestion':
-            case 'cancelada':
-            case 'revisión':
-            case 'revision':
-              mappedStatus = 'cerrada';
-              break;
-          }
-          fetchedData.status = mappedStatus;
 
           const hasCompletedSurveyLocal = localStorage.getItem(`encuesta_completada_${token}`);
           
@@ -406,7 +402,7 @@ return (
  <div className="min-h-screen flex items-center justify-center bg-[#f3f4f6] flex-col gap-4 font-sans px-6 text-center">
  <h1 className="text-3xl font-bold text-foreground">Instalación no encontrada</h1>
  <p className="text-muted-foreground text-lg">El link de seguimiento proporcionado es inválido o la operación no existe.</p>
- <Button onClick={() => navigate('/')} className="mt-4 rounded-2xl h-14 px-8 bg-primary hover:bg-primary-light text-white font-bold text-lg">Volver al inicio</Button>
+ <Button onClick={() => navigate('/')} className="mt-4 rounded-2xl h-14 px-8 bg-[#E3001B] hover:bg-[#c90018] text-white font-bold text-lg">Volver al inicio</Button>
  </div>
  );
  }
@@ -427,56 +423,24 @@ return (
  const statusIndex = ['programada', 'asignado', 'en_camino', 'en_proceso', 'finalizada', 'cerrada'].indexOf(status);
 
  const formatTramoToRange = (tramoStr?: string) => {
-   if (!tramoStr) return '8am - 12pm';
+   if (!tramoStr) return '08:00 - 12:00';
    
-   const t = tramoStr.toLowerCase();
-   if (t.startsWith('08') || t.startsWith('8')) return '8am - 12pm';
-   if (t.startsWith('12')) return '12pm - 4pm';
-   if (t.startsWith('16') || t.startsWith('4')) return '4pm - 8pm';
-   
+   // Si el string ya tiene el formato de rango (contiene un guion o la palabra " a ") lo dejamos tal cual
    if (tramoStr.includes('-') || tramoStr.toLowerCase().includes(' a ')) return tramoStr;
    
-   return tramoStr;
- };
-
- const parsePlanData = (campana?: string) => {
-   if (!campana) return { paquete: '', svas: [] };
-   if (!campana.includes('|')) return { paquete: '', svas: [] };
+   const t = tramoStr.toLowerCase();
+   if (t.includes('8') || t.includes('08')) return '08:00 - 12:00';
+   if (t.includes('12')) return '12:00 - 16:00';
+   if (t.includes('16') || t.includes('4')) return '16:00 - 20:00';
    
-   const parts = campana.split('|');
-   let paquete = '';
-   let svas: string[] = [];
-   
-   parts.forEach(part => {
-     const [key, ...valueParts] = part.split(':');
-     if (!key || valueParts.length === 0) return;
-     const value = valueParts.join(':').trim();
-     const cleanKey = key.trim().toLowerCase();
-     
-     if (cleanKey === 'paquete') {
-       paquete = value;
-     } else if (cleanKey === "sva's" || cleanKey === "svas") {
-        svas = value.split('+')
-          .map(s => s.trim())
-          .filter(s => s.length > 0 && !/^(ninguno|no|n\/a|na|no aplica|-|0|null|sin\s*sva|sin\s*sva's)$/i.test(s));
-     }
-   });
-
-   return { paquete, svas };
+   return tramoStr; // Por defecto retorna lo que venga si no coincide con los 3 tramos
  };
 
  const toTitleCase = (text?: string) => {
    if (!text) return '';
    return text.toLowerCase().replace(/(?:^|\s)\S/g, (a) => a.toUpperCase());
  };
- 
- const extractTechnicianName = (nombre?: string, _cuadrilla?: string) => {
-    if (nombre && nombre.trim() && nombre !== "Técnico Asignado") {
-      return toTitleCase(nombre.trim());
-    }
-    return "Técnico Asignado";
-  };;
- 
+
  const formatAddress = (address?: string) => {
    if (!address) return 'Cargando...';
    // Limpiar campos vacíos al final como "DPTO/INTERIOR -"
@@ -512,22 +476,48 @@ return (
  {/* Map Layer (Background) */}
  {status === 'en_camino' && (
  <div className="absolute top-0 left-0 w-full h-full z-0 bg-muted">
-  <TrackingMap 
-    status={status}
-    position={position}
-    vehiclePosition={vehiclePosition}
-    setCalculatedDurationSec={setCalculatedDurationSec}
-    setRoutePoints={setRoutePoints}
-    etaReferenceTimeRef={etaReferenceTime}
-    setRemainingSeconds={setRemainingSeconds}
-    clienteNombre={data.cliente_nombre}
-    routePoints={routePoints}
-  />
+ <MapContainer center={position} zoom={15} zoomControl={false} scrollWheelZoom={false} className="h-full w-full">
+ <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
+ <Marker position={position} icon={destIcon}><Popup>Tu dirección</Popup></Marker>
+ 
+ 
+
+ {status === 'en_camino' && (
+ <Routing 
+ start={vehiclePosition} 
+ end={position} 
+ onRouteCalculated={(coords, timeInSeconds) => {
+ setRoutePoints(coords);
+ setCalculatedDurationSec(timeInSeconds);
+ 
+ // Solo seteamos el tiempo restante si es la primera vez o si la nueva estimación de Google
+ // difiere por más de 5 minutos (300 segundos) de lo que nos queda, para evitar resetear el 
+ // contador por pequeñas fluctuaciones del GPS.
+ if (remainingSeconds === null || Math.abs(remainingSeconds - timeInSeconds) > 300) {
+   setRemainingSeconds(timeInSeconds);
+   etaReferenceTime.current = Date.now();
+ }
+ }} 
+ />
+ )}
+ {routePoints.length > 0 && status === 'en_camino' ? (
+ <AnimatedMarker 
+ routePoints={routePoints} 
+ durationSeconds={calculatedDurationSec}
+ icon={vehicleIcon} 
+ popupText="El técnico está en camino" 
+ />
+ ) : (
+ <Marker position={status === 'en_camino' ? vehiclePosition : position} icon={status === 'en_camino' ? vehicleIcon : destIcon}>
+   <Popup>{status === 'en_camino' ? 'El técnico' : 'Tu dirección'}</Popup>
+ </Marker>
+ )}
+ </MapContainer>
 
  {/* Mensaje Referencial superpuesto en el mapa */}
  <div className="absolute bottom-[26vh] left-4 z-[400] bg-white/90 backdrop-blur-sm px-3.5 py-2.5 rounded-xl shadow-md border border-gray-100 max-w-[200px]">
    <div className="flex items-center gap-1.5">
-     <AlertTriangle className="w-5 h-5 text-primary shrink-0" />
+     <AlertTriangle className="w-5 h-5 text-[#E3001B] shrink-0" />
      <p className="text-[11px] text-gray-600 font-normal leading-tight">
        El tiempo de llegada puede variar según el tráfico.
      </p>
@@ -552,13 +542,10 @@ return (
  
  {/* Top Banner Orange (Always visible if no map) */}
  {status !== 'en_camino' && (
- <div className="bg-primary w-full py-6 px-6 text-white shrink-0 relative z-30 shadow-sm flex flex-col justify-center">
- <div className="flex justify-between items-center w-full">
- <div className="flex flex-col items-start gap-0.5">
- <MainLogo white className="h-8 sm:h-10" />
- <h1 className="text-[20px] font-bold tracking-tight leading-tight mt-1">
-   {data?.cliente_nombre ? `Hola, ${data.cliente_nombre.split(' ')[0].toUpperCase()}` : 'Detalle de visita'}
- </h1>
+ <div className="bg-[#E3001B] w-full pt-8 pb-4 px-6 text-white shrink-0 relative z-30 shadow-sm">
+ <div className="flex justify-between items-center mb-2">
+ <div className="flex items-center">
+ <PeruFibraLogo white className="h-5 sm:h-6" />
  </div>
  <div className="relative">
  <button 
@@ -566,11 +553,11 @@ return (
  setShowNotifications(!showNotifications);
  setNotifications(prev => prev.map(n => ({...n, read: true})));
  }} 
- className="relative p-2 hover:bg-white/10 rounded-full transition-colors"
+ className="relative p-1 hover:bg-white/10 rounded-full transition-colors"
  >
- <Bell className="w-6 h-6 text-white fill-white" />
+ <Bell className="w-6 h-6" />
  {notifications.some(n => !n.read) && (
- <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-yellow-400 rounded-full border-2 border-primary"></div>
+ <div className="absolute top-1 right-1 w-2.5 h-2.5 bg-yellow-400 rounded-full border-2 border-[#E3001B]"></div>
  )}
  </button>
  
@@ -604,6 +591,9 @@ return (
  </AnimatePresence>
  </div>
  </div>
+ <h1 className="text-xl font-bold mt-1">
+ Detalle de visita
+ </h1>
  </div>
  )}
 
@@ -632,7 +622,7 @@ return (
   trackEvent('click_contactar_soporte_cerrada', { token });
   window.open('https://wa.me/51937096003');
 }} 
- className="w-full bg-primary text-white font-bold rounded-2xl h-14 shadow-lg text-[15px] flex items-center justify-center gap-2 transition-transform active:scale-95"
+ className="w-full bg-[#E3001B] text-white font-bold rounded-2xl h-14 shadow-lg text-[15px] flex items-center justify-center gap-2 transition-transform active:scale-95"
  >
  <Phone className="w-5 h-5" /> Contactar con Soporte
  </button>
@@ -651,12 +641,12 @@ return (
  <div className="bg-white border border-gray-100 shadow-sm rounded-2xl p-5">
  <p className="font-bold text-[14px] mb-3 text-gray-900">1. ¿La instalación se concretó correctamente?</p>
  <div className="flex gap-3">
- <label className="flex items-center justify-center gap-2 cursor-pointer bg-gray-50 px-4 py-2.5 rounded-xl border border-gray-100 flex-1 hover:bg-gray-100 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
- <input type="radio" name="q1" value="Sí" onChange={(e) => setEncuesta({...encuesta, instalacion_concretada: e.target.value})} className="accent-primary w-4 h-4" /> 
+ <label className="flex items-center justify-center gap-2 cursor-pointer bg-gray-50 px-4 py-2.5 rounded-xl border border-gray-100 flex-1 hover:bg-gray-100 transition-colors has-[:checked]:border-[#E3001B] has-[:checked]:bg-[#E3001B]/5">
+ <input type="radio" name="q1" value="Sí" onChange={(e) => setEncuesta({...encuesta, instalacion_concretada: e.target.value})} className="accent-[#E3001B] w-4 h-4" /> 
  <span className="font-bold text-[13px] text-gray-800">Sí</span>
  </label>
- <label className="flex items-center justify-center gap-2 cursor-pointer bg-gray-50 px-4 py-2.5 rounded-xl border border-gray-100 flex-1 hover:bg-gray-100 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
- <input type="radio" name="q1" value="No" onChange={(e) => setEncuesta({...encuesta, instalacion_concretada: e.target.value})} className="accent-primary w-4 h-4" /> 
+ <label className="flex items-center justify-center gap-2 cursor-pointer bg-gray-50 px-4 py-2.5 rounded-xl border border-gray-100 flex-1 hover:bg-gray-100 transition-colors has-[:checked]:border-[#E3001B] has-[:checked]:bg-[#E3001B]/5">
+ <input type="radio" name="q1" value="No" onChange={(e) => setEncuesta({...encuesta, instalacion_concretada: e.target.value})} className="accent-[#E3001B] w-4 h-4" /> 
  <span className="font-bold text-[13px] text-gray-800">No</span>
  </label>
  </div>
@@ -680,8 +670,8 @@ return (
      {[1,2,3,4,5].map(num => (
      <label key={`${aspect.key}_${num}`} className="flex-1">
      <input type="radio" name={aspect.key} value={num} onChange={(e) => setEncuesta({...encuesta, [aspect.key]: e.target.value})} className="peer hidden" />
-     <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-primary peer-checked:bg-primary/10 transition-all">
-     <span className={`text-[14px] font-bold ${(encuesta as any)[aspect.key] === num.toString() ? 'text-primary' : 'text-gray-500'}`}>{num}</span>
+     <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-[#E3001B] peer-checked:bg-[#E3001B]/10 transition-all">
+     <span className={`text-[14px] font-bold ${(encuesta as any)[aspect.key] === num.toString() ? 'text-[#E3001B]' : 'text-gray-500'}`}>{num}</span>
      </div>
      </label>
      ))}
@@ -700,8 +690,8 @@ return (
  <input type="radio" name="satisfaccion" value={num} onChange={(e) => {
    setEncuesta({...encuesta, satisfaccion_general: e.target.value, satisfaccion_comentario: ''});
  }} className="peer hidden" />
- <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-primary peer-checked:bg-primary/10 transition-all">
- <span className={`text-[14px] font-bold ${encuesta.satisfaccion_general === num.toString() ? 'text-primary' : 'text-gray-500'}`}>{num}</span>
+ <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-[#E3001B] peer-checked:bg-[#E3001B]/10 transition-all">
+ <span className={`text-[14px] font-bold ${encuesta.satisfaccion_general === num.toString() ? 'text-[#E3001B]' : 'text-gray-500'}`}>{num}</span>
  </div>
  </label>
  ))}
@@ -710,17 +700,17 @@ return (
  {encuesta.satisfaccion_general === '1' || encuesta.satisfaccion_general === '2' ? (
    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
      <p className="font-bold text-[13px] text-gray-900 mb-2">Lamentamos que tu experiencia no haya sido la ideal ¿Cuál fue el motivo principal de tu calificación?</p>
-     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-primary resize-none" rows={3}></textarea>
+     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-[#E3001B] resize-none" rows={3}></textarea>
    </div>
  ) : encuesta.satisfaccion_general === '3' ? (
    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
      <p className="font-bold text-[13px] text-gray-900 mb-2">Gracias por tu respuesta. ¿Qué hubiéramos podido hacer diferente para mejorar tu experiencia?</p>
-     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-primary resize-none" rows={3}></textarea>
+     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-[#E3001B] resize-none" rows={3}></textarea>
    </div>
  ) : encuesta.satisfaccion_general === '4' || encuesta.satisfaccion_general === '5' ? (
    <div className="animate-in fade-in slide-in-from-top-2 duration-300">
      <p className="font-bold text-[13px] text-gray-900 mb-2">¡Nos alegramos! Para seguir brindándote el mejor servicio: ¿Qué fue lo que más te gustó de la atención recibida?</p>
-     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-primary resize-none" rows={3}></textarea>
+     <textarea value={encuesta.satisfaccion_comentario} onChange={(e) => setEncuesta({...encuesta, satisfaccion_comentario: e.target.value})} className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-[13px] font-normal text-gray-800 focus:outline-none focus:border-[#E3001B] resize-none" rows={3}></textarea>
    </div>
  ) : null}
  </div>
@@ -735,8 +725,8 @@ return (
  <input type="radio" name="facilidad" value={num} onChange={(e) => {
    setEncuesta({...encuesta, facilidad_gestion: e.target.value, facilidad_motivo: ''});
  }} className="peer hidden" />
- <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-primary peer-checked:bg-primary/10 transition-all">
- <span className={`text-[14px] font-bold ${encuesta.facilidad_gestion === num.toString() ? 'text-primary' : 'text-gray-500'}`}>{num}</span>
+ <div className="border border-gray-100 bg-gray-50 rounded-xl flex flex-col items-center justify-center py-2 cursor-pointer hover:bg-gray-100 peer-checked:border-[#E3001B] peer-checked:bg-[#E3001B]/10 transition-all">
+ <span className={`text-[14px] font-bold ${encuesta.facilidad_gestion === num.toString() ? 'text-[#E3001B]' : 'text-gray-500'}`}>{num}</span>
  </div>
  </label>
  ))}
@@ -747,8 +737,8 @@ return (
      <p className="font-bold text-[13px] text-gray-900 mb-3">¿Qué fue lo más difícil o incómodo del proceso de instalación?</p>
      <div className="flex flex-col gap-2">
        {['Coordinar la visita', 'Tiempo de espera', 'Información o tracking poco claro', 'Atención del técnico', 'Duración de la instalación', 'Otro'].map(opcion => (
-         <label key={opcion} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50 border border-transparent has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-           <input type="radio" name="facilidad_motivo" value={opcion} onChange={(e) => setEncuesta({...encuesta, facilidad_motivo: e.target.value})} className="accent-primary w-4 h-4" />
+         <label key={opcion} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50 border border-transparent has-[:checked]:border-[#E3001B] has-[:checked]:bg-[#E3001B]/5">
+           <input type="radio" name="facilidad_motivo" value={opcion} onChange={(e) => setEncuesta({...encuesta, facilidad_motivo: e.target.value})} className="accent-[#E3001B] w-4 h-4" />
            <span className="text-[13px] font-normal text-gray-700">{opcion}</span>
          </label>
        ))}
@@ -760,7 +750,7 @@ return (
  <Button 
  onClick={handleEncuestaSubmit}
  disabled={isSubmittingEncuesta}
- className="w-full bg-primary hover:bg-primary-light text-white h-14 text-[15px] rounded-full shadow-[0_8px_20px_rgba(227,0,27,0.2)] transition-transform active:scale-95 font-bold mt-2">
+ className="w-full bg-[#E3001B] hover:bg-[#c90018] text-white h-14 text-[15px] rounded-full shadow-[0_8px_20px_rgba(227,0,27,0.2)] transition-transform active:scale-95 font-bold mt-2">
  {isSubmittingEncuesta ? "Enviando..." : "Enviar encuesta"}
  </Button>
  </div>
@@ -782,18 +772,41 @@ return (
  </div>
  ) : (
  <>
+ {/* Token de Inicio (Si está en camino) */}
+ {status === 'en_camino' && data.token_inicio && (
+ <div className="bg-gray-900 rounded-3xl p-4 mb-3 shadow-[0_8px_30px_rgb(0,0,0,0.12)] mt-1 flex items-center justify-between mx-0 overflow-hidden relative">
+   {/* Elemento decorativo de fondo */}
+   <div className="absolute top-0 right-0 w-32 h-32 bg-[#E3001B] rounded-full blur-[50px] opacity-20 -mr-10 -mt-10"></div>
+   
+   <div className="flex flex-col relative z-10 w-2/3 pr-2">
+     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Código de seguridad</p>
+     <p className="text-[12px] text-gray-300 font-normal leading-tight">
+       Comparte este PIN cuando el instalador llegue a tu domicilio.
+     </p>
+   </div>
+   
+   <div className="relative z-10 flex gap-1.5 shrink-0 bg-black/40 p-2 rounded-2xl border border-gray-700/50 backdrop-blur-md">
+     {data.token_inicio.split('').map((digit, i) => (
+       <div key={i} className="w-8 h-10 bg-gray-800 rounded-lg flex items-center justify-center text-xl font-bold text-white shadow-inner border border-gray-700/50">
+         {digit}
+       </div>
+     ))}
+   </div>
+ </div>
+ )}
+
  {/* Llegada del técnico separada del Info Card */}
  {status === 'en_camino' && (eta || calculatedEta) && (
- <div className="flex justify-between items-center mb-3 bg-primary/10 px-4 py-3.5 rounded-2xl gap-2">
+ <div className="flex justify-between items-center mb-3 bg-[#E3001B]/10 px-4 py-3.5 rounded-2xl gap-2">
    <div className="flex items-center gap-2">
       <span className="relative flex h-2 w-2">
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E3001B] opacity-75"></span>
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-[#E3001B]"></span>
       </span>
-      <span className="text-primary text-[13px] font-bold uppercase tracking-wide">Llegada estimada</span>
+      <span className="text-[#E3001B] text-[13px] font-bold uppercase tracking-wide">Llegada estimada</span>
    </div>
    <div className="flex justify-between items-center text-right">
-      <span className="font-bold text-primary text-[15px]">
+      <span className="font-bold text-[#E3001B] text-[15px]">
         {calculatedEta || eta}
       </span>
    </div>
@@ -802,79 +815,41 @@ return (
 
  {/* Info Card Minimalista */}
  <div className={`border border-gray-200 rounded-[20px] p-5 mb-6 bg-white shadow-sm ${status === 'en_camino' && (data.token_inicio || eta || calculatedEta) ? '' : 'mt-4'}`}>
- <div className="flex flex-col gap-4">
+ <h3 className="text-[16px] font-bold text-gray-900 mb-4 pb-3 border-b border-gray-100">
+   {data.tipo === 'ticket' ? 'Visita Técnica de ' : 'Instalación de '}{data.cliente_nombre ? toTitleCase(data.cliente_nombre.split(' ')[0]) : 'Cliente'}
+ </h3>
+ <div className="flex flex-col gap-3">
    <div className="flex justify-between items-center">
      <span className="text-gray-500 text-[14px] font-normal">Día</span>
      <span className="font-bold text-gray-900 text-[14px]">
-     {data.fecha_programacion && parseSafeDate(data.fecha_programacion) ? (
-       `${format(parseSafeDate(data.fecha_programacion)!, "d 'de' ", { locale: es })}${format(parseSafeDate(data.fecha_programacion)!, "MMMM", { locale: es }).toUpperCase()}`
-     ) : 'Por definir'}
+     {data.fecha_programacion && parseSafeDate(data.fecha_programacion) ? format(parseSafeDate(data.fecha_programacion)!, "dd/MM/yyyy") : 'Por definir'}
      </span>
    </div>
    {status !== 'en_camino' && (
      <div className="flex justify-between items-center">
-       <span className="text-gray-500 text-[14px] font-normal">Rango horario</span>
+       <span className="text-gray-500 text-[14px] font-normal">Horario programado</span>
        <span className="font-bold text-gray-900 text-[14px]">
        {formatTramoToRange(data.tramo)}
        </span>
      </div>
    )}
-   
-   {/* Dirección */}
+   {data.tipo !== 'ticket' && (
+     <div className="flex justify-between items-start">
+       <span className="text-gray-500 text-[14px] font-normal mr-4">Plan</span>
+       <span className="font-bold text-gray-900 text-[14px] text-right">
+       {toTitleCase(data.campana || 'No especificado')}
+       </span>
+     </div>
+   )}
    <div className="flex justify-between items-start">
      <span className="text-gray-500 text-[14px] font-normal mt-0.5 mr-4">Dirección</span>
      <span className="font-bold text-gray-900 text-[14px] text-right leading-snug line-clamp-3">
      {formatAddress(data.direccion)}
      </span>
    </div>
+ </div>
+ </div>
 
-   {/* Plan y Servicios */}
-   {data.tipo !== 'ticket' && (() => {
-     const parsedPlan = parsePlanData(data.campana);
-     return (
-       <div className="flex flex-col w-full mt-2 pt-4 border-t border-gray-100">
-         <span className="text-gray-500 text-[14px] font-normal mb-3">Plan y Servicios Contratados</span>
-         
-         {/* Burbuja Principal: Paquete */}
-         {parsedPlan.paquete && (
-           <div className="bg-[#d5001c]/10 border border-[#d5001c]/20 text-gray-900 px-4 py-3 rounded-2xl flex items-center shadow-sm">
-             <div className="pr-2">
-               <p className="text-[11px] font-bold text-[#d5001c] uppercase tracking-wider mb-0.5">Paquete de Internet</p>
-               <p className="text-[14px] font-bold">{toTitleCase(parsedPlan.paquete)}</p>
-             </div>
-           </div>
-         )}
-         
-{/* Burbujas Secundarias: SVAs (Lista Vertical Homologada) */}
-          {parsedPlan.svas.length > 0 && (
-            <div className="mt-3 bg-[#f2f2f2] rounded-2xl p-4 border border-[#e8e7e8]">
-              <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3">
-                Servicios Adicionales
-              </p>
-              <div className="flex flex-col gap-2.5">
-                {parsedPlan.svas.map((sva, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#d5001c] shrink-0"></div>
-                    <span className="text-[14px] font-medium text-gray-800 leading-tight">
-                      {toTitleCase(sva)}
-                    </span>
-                  </div>
-               ))}
-             </div>
-           </div>
-         )}
-         
-         {/* Fallback si no hay paquete separado por pipetas */}
-         {!parsedPlan.paquete && (
-           <div className="bg-gray-50 border border-gray-200 text-gray-900 px-4 py-3 rounded-2xl shadow-sm mt-2">
-             <p className="text-[14px] font-bold leading-snug">{toTitleCase(data.campana || 'No especificado')}</p>
-           </div>
-         )}
-       </div>
-     );
-   })()}
- </div>
- </div>
  {/* Vertical Timeline - Minimalista */}
  <div className="relative pl-[24px] border-l-[2px] border-dashed border-gray-300 ml-4 mb-10 mt-2">
  {steps.map((step, i) => {
@@ -883,7 +858,7 @@ return (
  return (
  <div key={step.id} className="relative pb-8 last:pb-0">
  {/* Timeline Dot */}
- <div className={`absolute -left-[35px] top-0 w-[20px] h-[20px] rounded-full flex items-center justify-center border-[2px] border-white shadow-sm ${isCompleted ? 'bg-primary' : 'bg-gray-300 '}`}>
+ <div className={`absolute -left-[35px] top-0 w-[20px] h-[20px] rounded-full flex items-center justify-center border-[2px] border-white shadow-sm ${isCompleted ? 'bg-[#E3001B]' : 'bg-gray-300 '}`}>
  {isCompleted && <Check className="w-[11px] h-[11px] text-white" strokeWidth={4} />}
  </div>
  
@@ -910,10 +885,10 @@ return (
  </div>
  <div className="flex-1">
  <p className="font-bold text-gray-900 text-[14px] leading-tight mb-0.5">
- {extractTechnicianName(tecnico.nombre, tecnico.cuadrilla)}
+ {tecnico.nombre.split(' ').slice(1).join(' ') || tecnico.nombre}
  </p>
  <div className="flex items-center gap-1 mt-0.5">
- <Star className="w-3 h-3 text-primary fill-primary" />
+ <Star className="w-3 h-3 text-[#E3001B] fill-[#E3001B]" />
  <span className="text-[11px] font-bold text-gray-600">4.9</span>
  <span className="text-[11px] text-gray-400 mx-1">•</span>
  <span className="text-[11px] text-gray-500 font-normal">Técnico asignado</span>
@@ -936,7 +911,7 @@ return (
    trackEvent('click_contactar_soporte', { token });
    window.open('https://wa.me/51937096003');
  }}
- className="w-full flex items-center justify-center gap-2 border border-primary text-primary h-12 rounded-full text-[14px] font-bold hover:bg-primary/5 active:scale-95 transition-all flex-row-reverse"
+ className="w-full flex items-center justify-center gap-2 border border-[#E3001B] text-[#E3001B] h-12 rounded-full text-[14px] font-bold hover:bg-[#E3001B]/5 active:scale-95 transition-all flex-row-reverse"
  >
  Contactar soporte
  <Phone className="w-4 h-4" />
@@ -951,7 +926,7 @@ return (
  className="w-full bg-[#1a202c] text-white h-12 rounded-full text-[14px] font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform shadow-md flex-row-reverse"
  >
  Reprogramar visita
- <CalendarDays className="w-5 h-5" />
+ <AlertTriangle className="w-4 h-4" />
  </button>
  )}
  </div>
@@ -976,8 +951,8 @@ return (
  className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full"
  >
  <div className="flex flex-col items-center text-center">
- <div className="w-16 h-16 bg-primary/20 rounded-full flex items-center justify-center mb-6">
- <XCircle className="w-8 h-8 text-primary" />
+ <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6">
+ <XCircle className="w-8 h-8 text-red-500" />
  </div>
  <h3 className="text-2xl font-bold text-gray-900 mb-2">¿Deseas cancelar?</h3>
  <p className="text-gray-500 mb-8 text-sm">
@@ -985,7 +960,7 @@ return (
  </p>
  <div className="flex flex-col w-full gap-3">
  <button 
- className="w-full bg-primary text-white rounded-2xl h-12 text-sm font-bold shadow-lg shadow-red-500/20" 
+ className="w-full bg-[#E3001B] text-white rounded-2xl h-12 text-sm font-bold shadow-lg shadow-red-500/20" 
  onClick={() => window.open('tel:017546000')}
  >
  Llamar a Central
@@ -1019,11 +994,11 @@ return (
  setIsReprogramModalOpen(false);
  setReprogramStep('form');
  }} 
- className="p-2 -ml-2 text-primary active:bg-primary/10 rounded-full transition-colors"
+ className="p-2 -ml-2 text-[#E3001B] active:bg-[#E3001B]/10 rounded-full transition-colors"
  >
  <ArrowLeft className="w-6 h-6" />
  </button>
- <h2 className="flex-1 text-center font-bold text-primary pr-8 text-[16px]">Reprogramación de visita</h2>
+ <h2 className="flex-1 text-center font-bold text-[#E3001B] pr-8 text-[16px]">Reprogramación de visita</h2>
  </div>
  
  {/* Body */}
@@ -1041,10 +1016,10 @@ return (
  <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
  <h3 className="font-bold text-[15px] text-gray-900 mb-2">Selecciona la fecha</h3>
  <div className="flex items-start gap-2 mb-4">
- <div className="w-4 h-4 rounded-full border border-primary text-primary flex items-center justify-center shrink-0 mt-0.5">
+ <div className="w-4 h-4 rounded-full border border-[#E3001B] text-[#E3001B] flex items-center justify-center shrink-0 mt-0.5">
  <span className="text-[10px] font-bold">i</span>
  </div>
- <p className="text-[11px] text-primary leading-tight font-normal">Ten en cuenta que depende de la disponibilidad de cupos.</p>
+ <p className="text-[11px] text-[#E3001B] leading-tight font-normal">Ten en cuenta que depende de la disponibilidad de cupos.</p>
  </div>
  <div className="bg-gray-50 rounded-xl px-4 py-2 border border-gray-100">
  <p className="text-[10px] text-gray-400 mb-0.5">Fecha de Programación</p>
@@ -1063,7 +1038,7 @@ return (
  <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
  <h3 className="font-bold text-[15px] text-gray-900 mb-4">Selecciona el tramo horario</h3>
  <div className="flex flex-wrap gap-2">
- {['8am - 12pm', '12pm - 4pm', '4pm - 8pm'].map(turno => (
+ {['08:00 - 12:00', '12:00 - 16:00', '16:00 - 20:00'].map(turno => (
  <label key={turno} className="flex-[1_1_30%]">
  <input 
  type="radio" 
@@ -1073,7 +1048,7 @@ return (
  onChange={(e) => setReprogramData({...reprogramData, turno: e.target.value})}
  className="peer hidden" 
  />
- <div className="text-center py-3 px-1 rounded-lg border border-gray-200 peer-checked:border-primary peer-checked:text-primary text-gray-600 text-[12px] font-bold transition-all bg-white cursor-pointer hover:border-primary/50">
+ <div className="text-center py-3 px-1 rounded-lg border border-gray-200 peer-checked:border-[#E3001B] peer-checked:text-[#E3001B] text-gray-600 text-[12px] font-bold transition-all bg-white cursor-pointer hover:border-[#E3001B]/50">
  {turno}
  </div>
  </label>
@@ -1087,11 +1062,11 @@ return (
  <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
  <h3 className="font-bold text-[15px] text-gray-900 mb-4">Motivo de Reprogramación</h3>
  
- <div className="mb-4 relative">
+ <div className="mb-4">
  <select
  value={reprogramData.motivoSeleccionado}
  onChange={(e) => setReprogramData({...reprogramData, motivoSeleccionado: e.target.value})}
- className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 pr-10 text-sm text-gray-700 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary appearance-none"
+ className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm text-gray-700 focus:outline-none focus:border-[#E3001B] focus:ring-1 focus:ring-[#E3001B]"
  >
  <option value="" disabled>Selecciona un motivo...</option>
  <option value="emergencia_personal">Emergencia personal / familiar</option>
@@ -1101,21 +1076,29 @@ return (
  <option value="olvido">Olvidé la cita original</option>
  <option value="otro">Otro motivo</option>
  </select>
- <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4">
-   <ChevronDown className="w-4 h-4 text-gray-400" />
- </div>
  </div>
 
  <h3 className="font-bold text-[14px] text-gray-900 mb-3">Detalle adicional (Opcional)</h3>
  <textarea 
  value={reprogramData.motivo}
  onChange={(e) => setReprogramData({...reprogramData, motivo: e.target.value})}
- className="w-full bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-none" 
+ className="w-full bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm focus:outline-none focus:border-[#E3001B] focus:ring-1 focus:ring-[#E3001B] resize-none" 
  rows={2} 
  placeholder="Ej: No estaré en casa, por favor venir por la tarde..."
  ></textarea>
 
- 
+ <h3 className="font-bold text-[14px] text-gray-900 mb-3 mt-5">PIN de Seguridad</h3>
+ <p className="text-[11px] text-gray-500 mb-2 leading-tight">
+   Ingresa el PIN de 4 dígitos que te fue asignado para confirmar tu identidad.
+ </p>
+ <input 
+ type="text"
+ maxLength={4}
+ value={reprogramData.pin_confirmacion}
+ onChange={(e) => setReprogramData({...reprogramData, pin_confirmacion: e.target.value.replace(/\D/g, '')})}
+ className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 text-center text-lg font-bold tracking-[0.5em] text-gray-900 focus:outline-none focus:border-[#E3001B] focus:ring-1 focus:ring-[#E3001B]"
+ placeholder="----"
+ />
  </div>
  )}
  </div>
@@ -1123,9 +1106,9 @@ return (
  {/* Footer CTA */}
  <div className="bg-white p-4 shadow-[0_-10px_20px_rgba(0,0,0,0.05)] shrink-0">
  <button 
- disabled={!reprogramData.fecha || !reprogramData.turno}
+ disabled={!reprogramData.fecha || !reprogramData.turno || reprogramData.pin_confirmacion.length !== 4}
  onClick={handleReprogramSubmit}
- className="w-full bg-primary disabled:bg-gray-300 disabled:text-gray-500 text-white font-bold h-12 rounded-full text-[14px] transition-colors shadow-lg shadow-primary/20"
+ className="w-full bg-[#E3001B] disabled:bg-gray-300 disabled:text-gray-500 text-white font-bold h-12 rounded-full text-[14px] transition-colors shadow-lg shadow-[#E3001B]/20"
  >
  {isSubmittingReprogram ? "Confirmando..." : "Confirmar Reprogramación"}
  </button>
@@ -1135,69 +1118,72 @@ return (
  </AnimatePresence>
 
  {/* Confirm & Success Modals inside Reprogram flow */}
-  <AnimatePresence>
-  {isReprogramModalOpen && reprogramStep === 'confirm_initial' && (
-  <motion.div 
-  initial={{ opacity: 0 }}
-  animate={{ opacity: 1 }}
-  exit={{ opacity: 0 }}
-  className="fixed inset-0 z-[110] bg-black/40 flex items-center justify-center p-6 backdrop-blur-sm"
-  >
-  <motion.div 
-  initial={{ scale: 0.9, y: 20 }}
-  animate={{ scale: 1, y: 0 }}
-  className="bg-white rounded-[20px] p-6 w-[290px] min-h-[350px] flex flex-col items-center text-center shadow-2xl justify-center"
-  >
-  <img src="/warning.png" alt="Advertencia" className="w-[60px] h-[60px] object-contain mb-5" />
-  <h3 className="text-[20px] font-bold text-[#0F090B] mb-8 leading-tight">¿Estás seguro de reprogramar tu visita?</h3>
-  <button 
-  onClick={() => setReprogramStep('form')}
-  className="w-full bg-[#d5001c] text-white font-medium h-[50px] rounded-full text-[18px] mb-3 shadow-[0_4px_8px_rgba(255,90,10,0.24)] active:scale-95 transition-transform"
-  >
-  Confirmar
-  </button>
-  <button 
-  onClick={() => setIsReprogramModalOpen(false)}
-  className="w-full bg-[#f2f2f2] text-[#0F090B] font-medium h-[50px] rounded-full text-[18px] active:scale-95 transition-transform shadow-[0_4px_8px_rgba(0,0,0,0.1)] hover:bg-[#e8e7e8]"
-  >
-  Volver
-  </button>
-  </motion.div>
-  </motion.div>
-  )}
+ <AnimatePresence>
+ {isReprogramModalOpen && reprogramStep === 'confirm_initial' && (
+ <motion.div 
+ initial={{ opacity: 0 }}
+ animate={{ opacity: 1 }}
+ exit={{ opacity: 0 }}
+ className="fixed inset-0 z-[110] bg-black/40 flex items-center justify-center p-6 backdrop-blur-sm"
+ >
+ <motion.div 
+ initial={{ scale: 0.9, y: 20 }}
+ animate={{ scale: 1, y: 0 }}
+ className="bg-white rounded-3xl p-8 max-w-sm w-full flex flex-col items-center text-center shadow-2xl"
+ >
+ <AlertTriangle className="w-16 h-16 text-[#E3001B] mb-6" strokeWidth={1.5} />
+ <h3 className="text-[18px] font-bold text-gray-900 mb-4 leading-tight">¿Estás seguro de reprogramar tu visita?</h3>
+ <p className="text-[12px] text-gray-500 mb-8 leading-relaxed">
+ Al reprogramarla, se cancelará la fecha actual y deberás seleccionar una nueva disponibilidad para la visita.
+ </p>
+ <button 
+ onClick={() => setReprogramStep('form')}
+ className="w-full bg-[#E3001B] text-white font-bold h-12 rounded-full text-[14px] mb-3 shadow-lg shadow-[#E3001B]/20"
+ >
+ Confirmar
+ </button>
+ <button 
+ onClick={() => setIsReprogramModalOpen(false)}
+ className="w-full bg-white text-[#E3001B] font-bold h-12 rounded-full text-[14px]"
+ >
+ Volver
+ </button>
+ </motion.div>
+ </motion.div>
+ )}
 
-  {isReprogramModalOpen && reprogramStep === 'success' && (
-  <motion.div 
-  initial={{ opacity: 0 }}
-  animate={{ opacity: 1 }}
-  exit={{ opacity: 0 }}
-  className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center p-6 backdrop-blur-sm"
-  >
-  <motion.div 
-  initial={{ scale: 0.9, y: 20 }}
-  animate={{ scale: 1, y: 0 }}
-  className="bg-white rounded-[20px] p-6 w-[290px] min-h-[350px] flex flex-col items-center text-center shadow-2xl justify-center"
-  >
-  <div className="w-[60px] h-[60px] bg-white border-2 border-[#d5001c] rounded-full flex items-center justify-center mb-5">
-  <Check className="w-[30px] h-[30px] text-[#d5001c]" strokeWidth={2.5} />
-  </div>
-  <h3 className="text-[20px] font-bold text-[#0F090B] mb-8 leading-tight">Visita reprogramada</h3>
-  <p className="text-[14px] text-[#8e8e8e] mb-8 font-normal leading-snug">
-  Tu solicitud de reprogramación se ha enviado con éxito.
-  </p>
-  <button 
-  onClick={() => {
-    setIsReprogramModalOpen(false);
-    setReprogramStep('confirm_initial');
-  }}
-  className="w-full bg-[#d5001c] text-white font-medium h-[50px] rounded-full text-[18px] shadow-[0_4px_8px_rgba(255,90,10,0.24)] active:scale-95 transition-transform"
-  >
-  Aceptar
-  </button>
-  </motion.div>
-  </motion.div>
-  )}
-  </AnimatePresence>
+ {isReprogramModalOpen && reprogramStep === 'success' && (
+ <motion.div 
+ initial={{ opacity: 0 }}
+ animate={{ opacity: 1 }}
+ exit={{ opacity: 0 }}
+ className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center p-6 backdrop-blur-sm"
+ >
+ <motion.div 
+ initial={{ scale: 0.9, y: 20 }}
+ animate={{ scale: 1, y: 0 }}
+ className="bg-white rounded-3xl p-8 max-w-sm w-full flex flex-col items-center text-center shadow-2xl"
+ >
+ <div className="w-20 h-20 bg-white border-4 border-[#E3001B] rounded-full flex items-center justify-center mb-6">
+ <Check className="w-10 h-10 text-gray-900" strokeWidth={4} />
+ </div>
+ <h3 className="text-[20px] font-bold text-gray-900 mb-3">Visita reprogramada</h3>
+ <p className="text-[13px] text-gray-500 mb-8 leading-relaxed">
+ Tu nueva visita ha sido confirmada. Revisa todos los detalles desde el historial de visitas.
+ </p>
+ <button 
+ onClick={() => {
+ setIsReprogramModalOpen(false);
+ setReprogramStep('confirm_initial');
+ }}
+ className="w-full bg-[#E3001B] text-white font-bold h-12 rounded-full text-[14px] shadow-lg shadow-[#E3001B]/20"
+ >
+ Aceptar
+ </button>
+ </motion.div>
+ </motion.div>
+ )}
+ </AnimatePresence>
 
  </div>
   );

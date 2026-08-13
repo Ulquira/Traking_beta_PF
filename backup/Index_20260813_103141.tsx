@@ -19,7 +19,7 @@ const Index = () => {
  <header className="absolute top-0 w-full z-50 pt-4 pb-12 bg-gradient-to-b from-primary via-primary/80 to-transparent">
  <div className="container mx-auto px-4 lg:px-8 flex justify-between items-center">
  <div className="flex items-center cursor-pointer" onClick={() => navigate('/')}>
- <img src={logoImg} alt="Winet" className="h-6 md:h-8 lg:h-10 w-auto object-contain drop-shadow-lg transition-all" />
+ <img src={logoImg} alt="Peru Fibra" className="h-6 md:h-8 lg:h-10 w-auto object-contain drop-shadow-lg transition-all" />
  </div>
  </div>
  </header>
