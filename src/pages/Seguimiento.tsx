@@ -472,10 +472,12 @@ return (
  
  const extractTechnicianName = (nombre?: string, _cuadrilla?: string) => {
     if (nombre && nombre.trim() && nombre !== "Técnico Asignado") {
-      return toTitleCase(nombre.trim());
+      const parts = nombre.trim().split(' ');
+      if (parts.length > 1) parts.shift(); // Remover el código (primera palabra)
+      return toTitleCase(parts.join(' '));
     }
     return "Técnico Asignado";
-  };;
+  };
  
  const formatAddress = (address?: string) => {
    if (!address) return 'Cargando...';
@@ -552,11 +554,11 @@ return (
  
  {/* Top Banner Orange (Always visible if no map) */}
  {status !== 'en_camino' && (
- <div className="bg-primary w-full py-6 px-6 text-white shrink-0 relative z-30 shadow-sm flex flex-col justify-center">
+ <div className="bg-primary w-full py-4 px-6 text-white shrink-0 relative z-30 shadow-sm flex flex-col justify-center">
  <div className="flex justify-between items-center w-full">
- <div className="flex flex-col items-start gap-0.5">
+ <div className="flex flex-col items-start gap-1">
  <MainLogo white className="h-8 sm:h-10" />
- <h1 className="text-[20px] font-bold tracking-tight leading-tight mt-1">
+ <h1 className="text-[20px] font-bold tracking-tight leading-tight mt-2.5">
    {data?.cliente_nombre ? `Hola, ${data.cliente_nombre.split(' ')[0].toUpperCase()}` : 'Detalle de visita'}
  </h1>
  </div>
