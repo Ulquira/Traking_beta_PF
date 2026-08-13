@@ -38,9 +38,9 @@ app.get('/api/v1/terceros/instalaciones/:token', verificarTercero, async (req, r
     const [rows] = await pool.query(
       `SELECT idoperacion, Estado, SubEstado, Cuadrilla, coordenadas_direccion, Ubi_TEC, telefono, fecha_programacion, Tramo_Atencio, nom_cliente, direccion_cliente, Campaña, Token_inicio 
        FROM OPERACION 
-       WHERE token_seguimiento = ? 
+       WHERE (token_seguimiento = ? OR token_seguimiento = ?) 
        ORDER BY fecha_programacion DESC LIMIT 1`, 
-      [token]
+      [token, token.length > 32 ? token.substring(0, 32) : token]
     );
 
     const instalaciones = rows as any[];
@@ -54,9 +54,9 @@ app.get('/api/v1/terceros/instalaciones/:token', verificarTercero, async (req, r
       const [ticketRows] = await pool.query(
         `SELECT IDticket, Estado, SubEstado, Cuadrilla_v, coordenadas_direccion, Ubi_TEC, telefono, Fecha_Gestion_v, Fecha_programacion, Tramo, nom_cliente, direccion_cliente, Token_inicio 
          FROM TICKETS 
-         WHERE token_seguimiento = ? 
+         WHERE (token_seguimiento = ? OR token_seguimiento = ?) 
          ORDER BY Fecha_Gestion_v DESC LIMIT 1`,
-        [token]
+        [token, token.length > 32 ? token.substring(0, 32) : token]
       );
       const tickets = ticketRows as any[];
       if (tickets.length === 0) {

@@ -807,8 +807,8 @@ return (
      <span className="text-gray-500 text-[14px] font-normal">Día</span>
      <span className="font-bold text-gray-900 text-[14px]">
      {data.fecha_programacion && parseSafeDate(data.fecha_programacion) ? (
-       `${format(parseSafeDate(data.fecha_programacion)!, "d 'de' ", { locale: es })}${format(parseSafeDate(data.fecha_programacion)!, "MMMM", { locale: es }).toUpperCase()}`
-     ) : 'Por definir'}
+       `${format(parseSafeDate(data.fecha_programacion)!, "d 'DE' MMMM", { locale: es }).toUpperCase()}`
+     ) : 'POR DEFINIR'}
      </span>
    </div>
    {status !== 'en_camino' && (
@@ -884,7 +884,7 @@ return (
  <div key={step.id} className="relative pb-8 last:pb-0">
  {/* Timeline Dot */}
  <div className={`absolute -left-[35px] top-0 w-[20px] h-[20px] rounded-full flex items-center justify-center border-[2px] border-white shadow-sm ${isCompleted ? 'bg-primary' : 'bg-gray-300 '}`}>
- {isCompleted && <Check className="w-[11px] h-[11px] text-white" strokeWidth={4} />}
+ {isCompleted && <Check className="w-[12px] h-[12px] text-white" strokeWidth={4} style={{ marginLeft: '-0.5px', marginTop: '0.5px' }} />}
  </div>
  
  {/* Content */}
