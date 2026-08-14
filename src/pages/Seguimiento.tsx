@@ -13,10 +13,17 @@ import TrackingMap from "@/components/seguimiento/TrackingMap";
 
 const parseSafeDate = (dateStr?: string) => {
   if (!dateStr) return null;
-  const match = dateStr.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (match) {
-    const [year, month, day] = match[1].split('-').map(Number);
-    return new Date(year, month - 1, day);
+  // Formato YYYY-MM-DD
+  const matchIso = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (matchIso) {
+    const [_, year, month, day] = matchIso;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  // Formato DD/MM/YYYY o D/M/YYYY
+  const matchEs = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (matchEs) {
+    const [_, day, month, year] = matchEs;
+    return new Date(Number(year), Number(month) - 1, Number(day));
   }
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? null : d;
@@ -474,7 +481,7 @@ return (
     if (nombre && nombre.trim() && nombre !== "Técnico Asignado") {
       const parts = nombre.trim().split(' ');
       if (parts.length > 1) parts.shift(); // Remover el código (primera palabra)
-      return toTitleCase(parts.join(' '));
+      return toTitleCase(parts.slice(0, 2).join(' '));
     }
     return "Técnico Asignado";
   };
